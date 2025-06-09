@@ -38,6 +38,13 @@ async def handle_event(ws: _Bot, msg: MessageReceive, is_http: bool = False):
     # 获取用户权限，越小越高
     msg.user_pm = user_pm = await get_user_pml(msg)
     event = await msg_process(msg)
+    try:
+        # 繁体转简体
+        from opencc import OpenCC
+        cc = OpenCC('t2s')  
+        event.raw_text = cc.convert(event.raw_text)
+    except Exception:
+            logger.info("[繁体转简体] 错误")
     logger.info('[收到事件]', event=event)
 
     if event.user_pm == 0:
