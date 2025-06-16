@@ -16,9 +16,11 @@ from gsuid_core.models import Event, Message, MessageReceive
 from gsuid_core.utils.database.models import CoreUser, CoreGroup, Subscribe
 from gsuid_core.utils.plugins_config.gs_config import (
     sp_config,
+    log_config,
     core_plugins_config,
 )
 
+show_receive: bool = log_config.get_config('ShowReceive').data
 command_start = core_config.get_config('command_start')
 enable_empty = core_config.get_config('enable_empty_start')
 config_masters = core_config.get_config('masters')
@@ -45,7 +47,8 @@ async def handle_event(ws: _Bot, msg: MessageReceive, is_http: bool = False):
         event.raw_text = cc.convert(event.raw_text)
     except Exception:
             logger.info("[繁体转简体] 错误")
-    logger.info('[收到事件]', event_payload=event)
+    if show_receive:
+        logger.info('[收到事件]', event_payload=event)
 
     if event.user_pm == 0:
         if not await Subscribe.data_exist(
