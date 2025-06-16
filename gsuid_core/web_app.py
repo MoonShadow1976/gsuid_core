@@ -55,7 +55,7 @@ pic_expire_time = core_plugins_config.get_config('ScheduledCleanPicSrv').data
 async def lifespan(app: FastAPI):
     try:
         logger.info(
-            '[GsCore] 执行启动Hook函数中！',
+            '♻ [GsCore] 执行启动Hook函数中！',
             [_def.__name__ for _def in core_start_def],
         )
         for _def in core_start_def:
@@ -510,8 +510,9 @@ async def get_image(image_id: str, background_tasks: BackgroundTasks):
 
 
 @app.get("/corelogs")
-async def core_log():
-    return StreamingResponse(read_log(), media_type='text/plain')
+@site.auth.requires('root')
+async def core_log(request: Request):
+    return StreamingResponse(read_log(), media_type='text/event-stream')
 
 
 @app.post('/genshinuid/api/loadData/{bot_id}/{bot_self_id}')
