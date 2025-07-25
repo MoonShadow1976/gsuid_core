@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Protocol
 import aiofiles
 import structlog
 from colorama import Fore, Style, init
+from structlog.dev import ConsoleRenderer
 from structlog.types import EventDict, Processor, WrappedLogger
 from structlog.processors import CallsiteParameter, CallsiteParameterAdder
 
@@ -112,15 +113,19 @@ def format_callsite_processor(
 
 def reduce_message(messages: List[Message]):
     for message in messages:
-        if message.data and len(message.data) >= 500:
-            message.data = message.data[:100]
+        dd = str(message.data)
+        if message.data and len(dd) >= 500:
+            try:
+                message.data = dd[:100]
+            except Exception:
+                pass
     return messages
 
 
 def format_event_for_console(
     logger: WrappedLogger, method_name: str, event_dict: EventDict
 ) -> EventDict:
-    event: Optional[Event] = event_dict.get("event_payload")
+    event: Optional[Event] = deepcopy(event_dict.get("event_payload"))
     if isinstance(event, Event):
         # 使用 colorama 的颜色代码重新构建主事件消息
         event_dict['event'] = (
@@ -242,6 +247,8 @@ def setup_logging():
     logger_list: List[str] = log_config.get(
         'output', ['stdout', 'stderr', 'file']
     )
+
+    final_level_styles = ConsoleRenderer.get_default_level_styles()
     level_styles = {
         # '级别名称的小写形式': colorama样式
         "trace": Fore.MAGENTA,  # 洋红色
@@ -252,6 +259,7 @@ def setup_logging():
         "error": Fore.RED,  # 红色 (保持默认)
         "critical": Style.BRIGHT + Fore.RED,  # 亮红色 (保持默认)
     }
+    final_level_styles.update(level_styles)
 
     # 定义所有处理器链共享的基础部分
     shared_processors: List[Processor] = [
@@ -289,7 +297,7 @@ def setup_logging():
         structlog.stdlib.ProcessorFormatter.remove_processors_meta,
         structlog.dev.ConsoleRenderer(
             colors=True,
-            level_styles=level_styles,
+            level_styles=final_level_styles,
             exception_formatter=structlog.dev.rich_traceback,
         ),
     ]
@@ -338,6 +346,14 @@ def setup_logging():
     )
 
     sys.excepthook = handle_exception
+
+    uvicorn_logger = logging.getLogger("uvicorn")
+    uvicorn_logger.setLevel(LEVEL)
+
+    for handler in root_logger.handlers:
+        uvicorn_logger.addHandler(handler)
+    # 防止日志重复记录（如果父日志器已处理）
+    uvicorn_logger.propagate = False
 
 
 setup_logging()

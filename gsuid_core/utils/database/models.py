@@ -1,7 +1,7 @@
-from typing import List, Type, Union, Optional
+from typing import List, Type, Union, Optional, Sequence
 
-from sqlalchemy import or_
 from sqlmodel import Field, select, update
+from sqlalchemy import UniqueConstraint, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gsuid_core.bot import Bot
@@ -109,7 +109,15 @@ class CoreTag(BaseIDModel, table=True):
 
 
 class CoreUser(BaseBotIDModel, table=True):
-    __table_args__ = {'extend_existing': True}
+    __table_args__ = (
+        UniqueConstraint(
+            'user_id',
+            'group_id',
+            'user_name',
+            name='record_coreuser',
+        ),
+        {'extend_existing': True},
+    )
 
     user_id: str = Field(default=None, title='账号')
     group_id: Optional[str] = Field(default=None, title='群号')
@@ -154,7 +162,9 @@ class CoreUser(BaseBotIDModel, table=True):
         cls,
         session: AsyncSession,
     ):
-        result: Optional[List[Type["CoreUser"]]] = await cls.select_rows(True)
+        result: Optional[Sequence[Type["CoreUser"]]] = await cls.select_rows(
+            True
+        )
         return result
 
     @classmethod
@@ -177,7 +187,7 @@ class CoreUser(BaseBotIDModel, table=True):
         session: AsyncSession,
         group_id: str,
     ):
-        result: Optional[List[Type["CoreUser"]]] = await cls.select_rows(
+        result: Optional[Sequence[Type["CoreUser"]]] = await cls.select_rows(
             group_id=group_id
         )
         return result
@@ -203,6 +213,17 @@ class CoreUser(BaseBotIDModel, table=True):
         user_name: Optional[str],
         user_icon: Optional[str],
     ) -> int:
+        data_full: Optional["CoreUser"] = await cls.base_select_data(
+            bot_id=bot_id,
+            user_id=user_id,
+            group_id=group_id,
+            user_name=user_name,
+            user_icon=user_icon,
+        )
+
+        if data_full:
+            return 1
+
         data: Optional["CoreUser"] = await cls.base_select_data(
             bot_id=bot_id,
             user_id=user_id,
@@ -248,7 +269,14 @@ class CoreUser(BaseBotIDModel, table=True):
 
 
 class CoreGroup(BaseBotIDModel, table=True):
-    __table_args__ = {'extend_existing': True}
+    __table_args__ = (
+        UniqueConstraint(
+            'group_id',
+            'group_name',
+            name='record_coregroup',
+        ),
+        {'extend_existing': True},
+    )
 
     group_id: str = Field(default='1', title='群号')
     group_count: int = Field(default=0, title='群活跃人数(每天更新)')
@@ -286,8 +314,10 @@ class CoreGroup(BaseBotIDModel, table=True):
     async def get_all_group(
         cls,
         session: AsyncSession,
-    ):
-        result: Optional[List[Type["CoreGroup"]]] = await cls.select_rows(True)
+    ) -> Sequence[Type["CoreGroup"]]:
+        result: Optional[Sequence[Type["CoreGroup"]]] = await cls.select_rows(
+            True
+        )
         return result
 
     @classmethod

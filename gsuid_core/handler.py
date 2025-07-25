@@ -10,7 +10,7 @@ from gsuid_core.logger import logger
 from gsuid_core.trigger import Trigger
 from gsuid_core.config import core_config
 from gsuid_core.subscribe import gs_subscribe
-from gsuid_core.global_val import get_global_val
+from gsuid_core.global_val import get_platform_val
 from gsuid_core.utils.cooldown import cooldown_tracker
 from gsuid_core.models import Event, Message, MessageReceive
 from gsuid_core.utils.database.models import CoreUser, CoreGroup, Subscribe
@@ -27,6 +27,7 @@ config_masters = core_config.get_config('masters')
 config_superusers = core_config.get_config('superusers')
 
 same_user_cd: int = sp_config.get_config('SameUserEventCD').data
+black_list: List[str] = sp_config.get_config('BlackList').data
 shield_list = core_plugins_config.get_config('ShieldQQBot').data
 
 _command_start: List[str]
@@ -62,7 +63,7 @@ async def handle_event(ws: _Bot, msg: MessageReceive, is_http: bool = False):
                 event,
             )
 
-    local_val = await get_global_val(event.real_bot_id, event.bot_self_id)
+    local_val = get_platform_val(event.real_bot_id, event.bot_self_id)
     local_val['receive'] += 1
 
     sender_nickname = None
@@ -152,7 +153,9 @@ async def handle_event(ws: _Bot, msg: MessageReceive, is_http: bool = False):
         for _type in SL.lst[sv].TL
         for tr in SL.lst[sv].TL[_type]
         if (
-            SL.lst[sv].plugins.enabled
+            msg.group_id not in black_list
+            and msg.user_id not in black_list
+            and SL.lst[sv].plugins.enabled
             and user_pm <= SL.lst[sv].plugins.pm
             and msg.group_id not in SL.lst[sv].plugins.black_list
             and msg.user_id not in SL.lst[sv].plugins.black_list
@@ -291,7 +294,7 @@ async def msg_process(msg: MessageReceive) -> Event:
 
 
 async def count_data(event: Event, trigger: Trigger):
-    local_val = await get_global_val(event.real_bot_id, event.bot_self_id)
+    local_val = get_platform_val(event.real_bot_id, event.bot_self_id)
     local_val['command'] += 1
     if event.group_id:
         if event.group_id not in local_val['group']:
@@ -301,6 +304,7 @@ async def count_data(event: Event, trigger: Trigger):
             local_val['group'][event.group_id][trigger.keyword] = 1
         else:
             local_val['group'][event.group_id][trigger.keyword] += 1
+        local_val['group_count'] = len(local_val['group'])
 
     if event.user_id:
         if event.user_id not in local_val['user']:
@@ -309,6 +313,8 @@ async def count_data(event: Event, trigger: Trigger):
             local_val['user'][event.user_id][trigger.keyword] = 1
         else:
             local_val['user'][event.user_id][trigger.keyword] += 1
+
+        local_val['user_count'] = len(local_val['user'])
 
 
 async def _check_command(

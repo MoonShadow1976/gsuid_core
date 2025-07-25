@@ -1,3 +1,5 @@
+import asyncio
+import sqlite3
 from functools import wraps
 from typing_extensions import ParamSpec, Concatenate
 from typing import (
@@ -11,9 +13,13 @@ from typing import (
     Awaitable,
 )
 
-# from sqlalchemy.pool import NullPool
-from sqlalchemy import exc, text, create_engine
+from sqlalchemy.exc import OperationalError
+from sqlalchemy import exc, text, event, create_engine
 from sqlalchemy.sql.expression import func, null, true
+
+# from sqlalchemy.pool import NullPool
+# from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker  # type: ignore
 from sqlmodel import Field, SQLModel, col, and_, delete, select, update
@@ -28,6 +34,7 @@ T_User = TypeVar('T_User', bound='User')
 T_Bind = TypeVar('T_Bind', bound='Bind')
 T_Push = TypeVar('T_Push', bound='Push')
 T_Cache = TypeVar('T_Cache', bound='Cache')
+T = TypeVar('T')
 P = ParamSpec("P")
 R = TypeVar("R")
 
@@ -58,6 +65,9 @@ DB_PATH = get_res_path() / 'GsData.db'
 sync_url, engine, finally_url = '', '', ''
 async_maker: async_sessionmaker[AsyncSession] = None  # type: ignore
 server_engine = None
+_db_init_lock = asyncio.Lock()
+_db_initialized = False
+sqlite_semaphore = None
 
 if _db_type == 'sqlite':
     sync_url = 'sqlite:///'
@@ -83,71 +93,108 @@ else:
 
 
 async def init_database():
-    global engine, finally_url, async_maker
+    global _db_initialized, engine, finally_url, async_maker, sqlite_semaphore
 
-    try:
-        if _db_type == 'sqlite':
-            engine = create_async_engine(f'{base_url}{db_url}', **db_config)
-            finally_url = f'{base_url}{db_url}'
-        else:
-            db_config.update(
-                {
-                    'pool_size': db_pool_size,
-                    'max_overflow': 10,
-                    'pool_timeout': 30,
-                    'isolation_level': "AUTOCOMMIT",
-                }
-            )
-            try:
-                server_engine = None
-                if _db_type == 'mysql':
-                    server_engine = create_engine(
-                        f'{sync_url}{db_url}', **db_config
-                    )
+    if _db_initialized:
+        return
 
-                    with server_engine.connect() as conn:
-                        t1 = f"CREATE DATABASE IF NOT EXISTS {db_name} "
-                        t2 = "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-                        conn.execute(text(t1 + t2))
-                        logger.success(
-                            f"[MySQL] 数据库 {db_name} 创建成功或已存在!"
-                        )
-                elif _db_type == 'postgresql':
-                    try:
+    async with _db_init_lock:
+        if _db_initialized:
+            return
+
+        logger.info("📀 [数据库] 开始初始化...")
+
+        try:
+            if _db_type == 'sqlite':
+                db_config.update(
+                    {
+                        'connect_args': {'check_same_thread': False},
+                        # 'poolclass': StaticPool,
+                    }
+                )
+                engine = create_async_engine(
+                    f'{base_url}{db_url}', **db_config
+                )
+                finally_url = f'{base_url}{db_url}'
+
+                @event.listens_for(engine.sync_engine, "connect")
+                def set_sqlite_pragma(
+                    dbapi_connection: sqlite3.Connection, connection_record
+                ):
+                    cursor = dbapi_connection.cursor()
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=NORMAL")
+                    cursor.execute("PRAGMA busy_timeout=5000")
+                    cursor.close()
+                    # logger.debug("PRAGMAs set for new connection.")
+
+                sqlite_semaphore = asyncio.Semaphore(20)
+            else:
+                db_config.update(
+                    {
+                        'pool_size': db_pool_size,
+                        'max_overflow': 10,
+                        'pool_timeout': 30,
+                        'isolation_level': "AUTOCOMMIT",
+                    }
+                )
+                try:
+                    server_engine = None
+                    if _db_type == 'mysql':
                         server_engine = create_engine(
                             f'{sync_url}{db_url}', **db_config
                         )
+
                         with server_engine.connect() as conn:
-                            t = f"CREATE DATABASE {db_name} WITH ENCODING "
-                            t2 = "'UTF8' LC_COLLATE 'en_US.UTF-8' LC_CTYPE "
-                            t3 = "'en_US.UTF-8' TEMPLATE template0"
-                            conn.execute(text(t + t2 + t3))
-                    except exc.ProgrammingError as e:
-                        if 'already exists' in str(e) or '已经存在' in str(e):
-                            pass
-                    logger.success(
-                        f"[PostgreSQL] 数据库 {db_name} 创建成功或已存在!"
-                    )
-            finally:
-                if server_engine:
-                    server_engine.dispose()
-                    logger.info('[数据库] 临时数据库连接已释放!')
+                            t1 = f"CREATE DATABASE IF NOT EXISTS {db_name} "
+                            t2 = "CHARACTER SET utf8mb4 COLLATE "
+                            t3 = 'utf8mb4_unicode_ci'
+                            conn.execute(text(t1 + t2 + t3))
+                            logger.success(
+                                f"[MySQL] 数据库 {db_name} 创建成功或已存在!"
+                            )
+                    elif _db_type == 'postgresql':
+                        try:
+                            server_engine = create_engine(
+                                f'{sync_url}{db_url}', **db_config
+                            )
+                            with server_engine.connect() as conn:
+                                t = f"CREATE DATABASE {db_name} WITH ENCODING "
+                                t2 = (
+                                    "'UTF8' LC_COLLATE 'en_US.UTF-8' LC_CTYPE "
+                                )
+                                t3 = "'en_US.UTF-8' TEMPLATE template0"
+                                conn.execute(text(t + t2 + t3))
+                        except exc.ProgrammingError as e:
+                            if 'already exists' in str(e) or '已经存在' in str(
+                                e
+                            ):
+                                pass
+                        logger.success(
+                            f"[PostgreSQL] 数据库 {db_name} 创建成功或已存在!"
+                        )
+                finally:
+                    if server_engine:
+                        server_engine.dispose()
+                        logger.info('[数据库] 临时数据库连接已释放!')
 
-            # db_config['poolclass'] = NullPool
-            finally_url = f'{base_url}{db_url}{db_name}'
-            engine = create_async_engine(finally_url, **db_config)
+                # db_config['poolclass'] = NullPool
+                finally_url = f'{base_url}{db_url}{db_name}'
+                engine = create_async_engine(finally_url, **db_config)
 
-        async_maker = async_sessionmaker(
-            engine,
-            expire_on_commit=False,
-            close_resets_only=False,
-            class_=AsyncSession,
-        )
-    except Exception as e:  # noqa: E722
-        logger.exception(f'[GsCore] [数据库] 连接失败: {e}')
-        raise ValueError(
-            f'[GsCore] [数据库] [{base_url}] 连接失败, 请检查配置文件!'
-        )
+            async_maker = async_sessionmaker(
+                engine,
+                expire_on_commit=False,
+                close_resets_only=False,
+                class_=AsyncSession,
+            )
+
+            _db_initialized = True
+        except Exception as e:  # noqa: E722
+            logger.exception(f'[GsCore] [数据库] 连接失败: {e}')
+            raise ValueError(
+                f'[GsCore] [数据库] [{base_url}] 连接失败, 请检查配置文件!'
+            )
 
 
 def with_session(
@@ -158,13 +205,26 @@ def with_session(
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                async with async_maker() as session:
-                    data = await func(self, session, *args, **kwargs)
-                    await session.commit()
-                    return data
+                if sqlite_semaphore:
+                    async with sqlite_semaphore:
+                        async with async_maker() as session:
+                            data = await func(self, session, *args, **kwargs)
+                            await session.commit()
+                            return data
+                else:
+                    async with async_maker() as session:
+                        data = await func(self, session, *args, **kwargs)
+                        await session.commit()
+                        return data
+            except OperationalError as e:
+                if "unable to open database file" in str(e):
+                    logger.error("[数据库] 数据库无法打开，停止重试")
+                    break
+                logger.warning(f"[数据库] 第 {attempt + 1} 次重试失败: {e}")
+                await asyncio.sleep(0.5 * (2**attempt))  # 指数退避
             except Exception as e:
                 logger.exception(f"[数据库] 第 {attempt + 1} 次重试失败: {e}")
-                continue
+                await asyncio.sleep(0.5 * (2**attempt))
 
     return wrapper  # type: ignore
 
@@ -172,6 +232,113 @@ def with_session(
 # https://github.com/tiangolo/sqlmodel/issues/264
 class BaseIDModel(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True, title='序号')
+
+    @classmethod
+    @with_session
+    async def get_distinct_list(
+        cls,
+        session: AsyncSession,
+        column: InstrumentedAttribute[T],
+    ):
+        result = await session.execute(select(column).distinct())
+        r = result.all()
+        return r
+
+    @classmethod
+    @with_session
+    async def batch_insert_data(
+        cls,
+        session: AsyncSession,
+        datas: List["BaseIDModel"],
+    ):
+        session.add_all(datas)
+
+    @classmethod
+    @with_session
+    async def batch_insert_data_with_update(
+        cls,
+        session: AsyncSession,
+        datas: List["BaseIDModel"],
+        update_key: List[str],
+        index_elements: List[str],
+    ):
+        '''
+        MySQL需要预先定义约束条件！！
+        '''
+        if not datas:
+            return
+
+        values_to_insert = [data.model_dump() for data in datas]
+        if _db_type == 'sqlite':
+            from sqlalchemy.dialects.sqlite import insert
+
+            stmt = insert(cls)
+            update_stmt = stmt.on_conflict_do_update(
+                index_elements=index_elements,
+                set_={k: stmt.excluded[k] for k in update_key},
+            )
+        elif _db_type == 'postgresql':
+            from sqlalchemy.dialects.postgresql import insert
+
+            stmt = insert(cls)
+            update_stmt = stmt.on_conflict_do_update(
+                index_elements=index_elements,
+                set_={k: stmt.excluded[k] for k in update_key},
+            )
+        elif _db_type == 'mysql':
+            from sqlalchemy.dialects.mysql import insert
+
+            stmt = insert(cls)
+            update_dict = {
+                col: getattr(stmt.inserted, col) for col in update_key
+            }
+            update_stmt = stmt.on_duplicate_key_update(**update_dict)
+        else:
+            raise ValueError(f'[GsCore] [数据库] 不支持 {_db_type} 数据库!')
+
+        await session.execute(update_stmt, values_to_insert)
+
+    @classmethod
+    @with_session
+    async def update_data_by_data(
+        cls,
+        session: AsyncSession,
+        select_data: Dict,
+        update_data: Dict,
+    ) -> int:
+        '''📝简单介绍:
+
+            基类的数据更新方法
+
+        🌱参数:
+
+            🔹select_data (`Dict`):
+                    寻找数据条件, 例如`{"user_id": `event.bot_id`}`
+
+            🔹`update_data (`Dict`)`:
+                    要更新的数据
+
+        🚀使用范例:
+
+            `await GsUser.update_data_by_data(`
+                `select_data={"user_id": `event.bot_id`}, `
+                `update_data={"bot_id": 'onebot', "uid": '22'}`
+            `)`
+
+        ✅返回值:
+
+            🔸`int`: 成功为0, 失败为-1（未找到数据则无法更新）
+        '''
+        sql = update(cls)
+        for k, v in select_data.items():
+            sql = sql.where(getattr(cls, k) == v)
+
+        if update_data:
+            query = sql.values(**update_data)
+            query.execution_options(synchronize_session='fetch')
+            await session.execute(query)
+            return 0
+        return -1
 
     @classmethod
     def get_gameid_name(cls, game_name: Optional[str] = None) -> str:
@@ -252,7 +419,7 @@ class BaseIDModel(SQLModel):
         session: AsyncSession,
         distinct: bool = False,
         **data,
-    ) -> Optional[List[T_BaseIDModel]]:
+    ):
         '''📝简单介绍:
 
             数据库基类基础选择数据方法
@@ -446,7 +613,7 @@ class BaseBotIDModel(BaseIDModel):
         sql = update(cls).where(and_(getattr(cls, uid_name) == uid))
 
         if bot_id is not None:
-            sql = sql.where(cls.bot_id == bot_id)
+            sql = sql.where(and_(cls.bot_id == bot_id))
 
         if data is not None:
             query = sql.values(**data)
@@ -460,9 +627,9 @@ class BaseBotIDModel(BaseIDModel):
     async def get_all_data(
         cls: Type[T_BaseIDModel],
         session: AsyncSession,
-    ) -> List[Type[T_BaseIDModel]]:
+    ):
         rdata = await session.execute(select(cls))
-        data: List[Type[T_BaseIDModel]] = rdata.scalars().all()
+        data = rdata.scalars().all()
         return data
 
 
@@ -480,7 +647,7 @@ class BaseModel(BaseBotIDModel):
         session: AsyncSession,
         user_id: str,
         bot_id: Optional[str] = None,
-    ) -> Optional[List[T_BaseModel]]:
+    ):
         '''📝简单介绍:
 
             基类的数据选择方法
@@ -499,13 +666,13 @@ class BaseModel(BaseBotIDModel):
 
         ✅返回值:
 
-            🔸`Optional[List[T_BaseModel]]`: 选中符合条件的全部数据，不存在则为`None`
+            🔸`Optional[Sequence[T_BaseModel]]`: 选中符合条件的全部数据，不存在则为`None`
         '''
         if bot_id is None:
             sql = select(cls).where(cls.user_id == user_id)
         else:
             sql = select(cls).where(
-                cls.user_id == user_id, cls.bot_id == bot_id
+                and_(cls.user_id == user_id, cls.bot_id == bot_id)
             )
         result = await session.execute(sql)
         data = result.scalars().all()
@@ -614,48 +781,6 @@ class BaseModel(BaseBotIDModel):
         '''
         await session.delete(cls(user_id=user_id, bot_id=bot_id, **data))
         return 0
-
-    @classmethod
-    @with_session
-    async def update_data_by_data(
-        cls: Type[T_BaseModel],
-        session: AsyncSession,
-        select_data: Dict,
-        update_data: Dict,
-    ) -> int:
-        '''📝简单介绍:
-
-            基类的数据更新方法
-
-        🌱参数:
-
-            🔹select_data (`Dict`):
-                    寻找数据条件, 例如`{"user_id": `event.bot_id`}`
-
-            🔹`update_data (`Dict`)`:
-                    要更新的数据
-
-        🚀使用范例:
-
-            `await GsUser.update_data_by_data(`
-                `select_data={"user_id": `event.bot_id`}, `
-                `update_data={"bot_id": 'onebot', "uid": '22'}`
-            `)`
-
-        ✅返回值:
-
-            🔸`int`: 成功为0, 失败为-1（未找到数据则无法更新）
-        '''
-        sql = update(cls)
-        for k, v in select_data.items():
-            sql = sql.where(getattr(cls, k) == v)
-
-        if update_data:
-            query = sql.values(**update_data)
-            query.execution_options(synchronize_session='fetch')
-            await session.execute(query)
-            return 0
-        return -1
 
     @classmethod
     @with_session
@@ -1091,7 +1216,7 @@ class User(BaseModel):
         session: AsyncSession,
         uid: str,
         game_name: Optional[str] = None,
-    ) -> Optional[Type[T_User]]:
+    ):
         '''📝简单介绍:
 
             基础`User`类的数据选择方法
@@ -1121,7 +1246,7 @@ class User(BaseModel):
     @with_session
     async def get_user_all_data_by_user_id(
         cls: Type[T_User], session: AsyncSession, user_id: str
-    ) -> Optional[List[T_User]]:
+    ):
         '''📝简单介绍:
 
             基础`User`类的数据选择方法, 获取该`user_id`绑定的全部数据实例
@@ -1307,14 +1432,14 @@ class User(BaseModel):
         _switch = getattr(cls, switch_name, cls.push_switch)
         sql = select(cls).filter(and_(_switch != 'off', true()))
         data = await session.execute(sql)
-        data_list: List[T_User] = data.scalars().all()
+        data_list = data.scalars().all()
         return [user for user in data_list]
 
     @classmethod
     @with_session
     async def get_all_user(
         cls: Type[T_User], session: AsyncSession, without_error: bool = True
-    ) -> List[T_User]:
+    ):
         '''📝简单介绍:
 
             基础`User`类的扩展方法, 获取到全部的数据列表
@@ -1482,7 +1607,7 @@ class User(BaseModel):
                     .order_by(func.random())
                 )
                 data = await session.execute(sql)
-                user_list: List[Type["User"]] = data.scalars().all()
+                user_list = data.scalars().all()
                 break
             else:
                 user_list = await cls.get_all_user()

@@ -1,9 +1,10 @@
 import asyncio
 from io import BytesIO
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import date as dt_date
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
+from typing import Dict, List, Optional, Sequence
 
 import aiofiles
 from PIL import Image
@@ -15,7 +16,6 @@ from fastapi.responses import Response, StreamingResponse
 
 from gsuid_core.sv import SL
 from gsuid_core.gss import gss
-import gsuid_core.global_val as gv
 from gsuid_core.data_store import image_res
 from gsuid_core.webconsole.mount_app import site
 from gsuid_core.segment import Message, MessageSegment
@@ -38,6 +38,11 @@ from gsuid_core.logger import (
     read_log,
     clean_log,
 )
+from gsuid_core.utils.database.global_val_models import (
+    DataType,
+    CoreDataSummary,
+    CoreDataAnalysis,
+)
 from gsuid_core.utils.plugins_update._plugins import (
     check_status,
     check_plugins,
@@ -49,6 +54,8 @@ from gsuid_core.utils.plugins_update._plugins import (
 
 is_clean_pic = core_plugins_config.get_config('EnableCleanPicSrv').data
 pic_expire_time = core_plugins_config.get_config('ScheduledCleanPicSrv').data
+
+TEMP_DICT: Dict[str, Dict] = {}
 
 
 @asynccontextmanager
@@ -63,15 +70,19 @@ async def lifespan(app: FastAPI):
                 asyncio.create_task(_def())
             else:
                 asyncio.create_task(asyncio.to_thread(_def))
-
     except Exception as e:
         logger.exception(e)
 
+    from gsuid_core.global_val import trans_global_val
     from gsuid_core.webconsole.__init__ import start_check
 
     await start_check()  # type:ignore
     await start_scheduler()
     asyncio.create_task(clean_log())
+    await trans_global_val()
+
+    # 将在几个版本后删除
+    await CoreDataAnalysis.update_summary()
 
     yield
 
@@ -254,114 +265,125 @@ async def _get_plugins(request: Request):
 @site.auth.requires('root')
 async def _get_data_analysis(
     request: Request,
-    bot_id: str,
-    bot_self_id: str,
+    bot_id: Optional[str],
+    bot_self_id: Optional[str],
 ):
-    if bot_id not in gv.bot_val:
-        retcode, msg, data = -1, '不存在该bot_id!', {}
-    elif bot_self_id not in gv.bot_val[bot_id]:
-        retcode, msg, data = -1, '不存在该bot_self_id!', {}
+    if bot_id == 'None' or bot_self_id == 'None':
+        bot_id = None
+        bot_self_id = None
+
+    xaxis = []
+    series = []
+
+    send_data = []
+    receive_data = []
+    command_data = []
+    image_gen_data = []
+
+    datas = await CoreDataSummary.get_day_trends(bot_id, bot_self_id)
+
+    if bot_id is None or bot_self_id is None:
+        key = 'all_bots'
     else:
-        retcode, msg = 0, 'ok'
+        key = 'bot'
 
-        xaxis = []
-        series = []
+    for day in range(46):
+        daystr = (
+            datetime.now() - timedelta(days=45) + timedelta(days=day)
+        ).strftime('%m-%d')
+        xaxis.append(daystr)
+        send_data.append(datas[f'{key}_send'][day])
+        receive_data.append(datas[f'{key}_receive'][day])
+        command_data.append(datas[f'{key}_command'][day])
+        image_gen_data.append(datas[f'{key}_image'][day])
 
-        send_data = []
-        receive_data = []
-        command_data = []
-        image_gen_data = []
-
-        seven_data = await gv.get_value_analysis(bot_id, bot_self_id)
-        for day in seven_data:
-            xaxis.append(day)
-            local_val = seven_data[day]
-            send_data.append(local_val['send'])
-            receive_data.append(local_val['receive'])
-            command_data.append(local_val['command'])
-            image_gen_data.append(local_val['image'])
-
-        series.append({'name': '发送', 'type': 'line', 'data': send_data})
-        series.append(
-            {
-                'name': '接收',
-                'type': 'line',
-                'data': receive_data,
-            }
-        )
-        series.append(
-            {
-                'name': '命令调用',
-                'type': 'line',
-                'data': command_data,
-            }
-        )
-        series.append(
-            {
-                'name': '图片生成',
-                'type': 'line',
-                'data': image_gen_data,
-            }
-        )
-
-        data = {
-            'title': {'text': ''},
-            'tooltip': {'trigger': 'axis'},
-            'legend': {'data': ['发送', '接收', '命令调用', '图片生成']},
-            'xAxis': {'type': 'category', 'boundaryGap': False, 'data': xaxis},
-            'yAxis': {'type': 'value'},
-            'series': series,
+    series.append({'name': '发送', 'type': 'line', 'data': send_data})
+    series.append(
+        {
+            'name': '接收',
+            'type': 'line',
+            'data': receive_data,
         }
+    )
+    series.append(
+        {
+            'name': '命令调用',
+            'type': 'line',
+            'data': command_data,
+        }
+    )
+    series.append(
+        {
+            'name': '图片生成',
+            'type': 'line',
+            'data': image_gen_data,
+        }
+    )
 
-    return {'status': retcode, 'msg': msg, 'data': data}
+    data = {
+        'title': {'text': ''},
+        'tooltip': {'trigger': 'axis'},
+        'legend': {'data': ['发送', '接收', '命令调用', '图片生成']},
+        'xAxis': {'type': 'category', 'boundaryGap': False, 'data': xaxis},
+        'yAxis': {'type': 'value'},
+        'series': series,
+    }
+
+    return {'status': 0, 'msg': '数据获取成功！', 'data': data}
 
 
 @app.get('/genshinuid/api/getAnalysisUserGroup/{bot_id}/{bot_self_id}')
 @site.auth.requires('root')
 async def _get_usergroup_analysis(
     request: Request,
-    bot_id: str,
-    bot_self_id: str,
+    bot_id: Optional[str],
+    bot_self_id: Optional[str],
 ):
-    if bot_id not in gv.bot_val:
-        retcode, msg, data = -1, '不存在该bot_id!', {}
-    elif bot_self_id not in gv.bot_val[bot_id]:
-        retcode, msg, data = -1, '不存在该bot_self_id!', {}
+    if bot_id == 'None' or bot_self_id == 'None':
+        bot_id = None
+        bot_self_id = None
+    xaxis = []
+    series = []
+
+    group_data = []
+    user_data = []
+
+    datas = await CoreDataSummary.get_day_trends(bot_id, bot_self_id)
+
+    if bot_id is None or bot_self_id is None:
+        group_key = 'all_bots_group_count'
+        user_key = 'all_bots_user_count'
     else:
-        retcode, msg = 0, 'ok'
+        group_key = 'bot_group_count'
+        user_key = 'bot_user_count'
 
-        xaxis = []
-        series = []
+    for day in range(46):
+        daystr = (
+            datetime.now() - timedelta(days=45) + timedelta(days=day)
+        ).strftime('%m-%d')
+        xaxis.append(daystr)
+        group_data.append(datas[group_key][day])
+        user_data.append(datas[user_key][day])
 
-        group_data = []
-        user_data = []
-
-        seven_data = await gv.get_value_analysis(bot_id, bot_self_id)
-        for day in seven_data:
-            xaxis.append(day)
-            local_val = seven_data[day]
-            group_data.append(len(local_val['group']))
-            user_data.append(len(local_val['user']))
-
-        series.append({'name': '用户', 'type': 'bar', 'data': user_data})
-        series.append(
-            {
-                'name': '群组',
-                'type': 'bar',
-                'data': group_data,
-            }
-        )
-
-        data = {
-            'title': {'text': ''},
-            'tooltip': {'trigger': 'axis'},
-            'legend': {'data': ['用户', '群组']},
-            'xAxis': {'type': 'category', 'boundaryGap': False, 'data': xaxis},
-            'yAxis': {'type': 'value'},
-            'series': series,
+    series.append({'name': '用户', 'type': 'bar', 'data': user_data})
+    series.append(
+        {
+            'name': '群组',
+            'type': 'bar',
+            'data': group_data,
         }
+    )
 
-    return {'status': retcode, 'msg': msg, 'data': data}
+    data = {
+        'title': {'text': ''},
+        'tooltip': {'trigger': 'axis'},
+        'legend': {'data': ['用户', '群组']},
+        'xAxis': {'type': 'category', 'boundaryGap': False, 'data': xaxis},
+        'yAxis': {'type': 'value'},
+        'series': series,
+    }
+
+    return {'status': 0, 'msg': '数据获取成功！', 'data': data}
 
 
 @app.post('/genshinuid/api/updatePlugins')
@@ -393,11 +415,11 @@ async def _batch_push(request: Request, data: Dict):
     soup = BeautifulSoup(send_msg, 'lxml')
 
     msg: List[Message] = []
-    text_list: List[Tag] = list(soup.find_all('p'))
+    text_list: List[Tag] = list(soup.find_all('p'))  # type: ignore
     for text in text_list:
         msg.append(MessageSegment.text(str(text)[3:-4] + '\n'))
 
-    img_tag: List[Tag] = list(soup.find_all('img'))
+    img_tag: List[Tag] = list(soup.find_all('img'))  # type: ignore
     for img in img_tag:
         src: str = img.get('src')  # type: ignore
         width: str = img.get('width')  # type: ignore
@@ -515,98 +537,221 @@ async def core_log(request: Request):
     return StreamingResponse(read_log(), media_type='text/event-stream')
 
 
-@app.post('/genshinuid/api/loadData/{bot_id}/{bot_self_id}')
+@app.post('/genshinuid/api/loadData{count}/{bot_id}/{bot_self_id}')
 @site.auth.requires('root')
 async def get_history_data(
     request: Request,
     data: Dict,
-    bot_id: str,
-    bot_self_id: str,
+    count: int,
+    bot_id: Optional[str],
+    bot_self_id: Optional[str],
 ):
     name = data.get('name', None)
-    a_pie_data = []
-    b_pie_data = []
     if name is None:
-        seven_day = await gv.get_value_analysis(bot_id, bot_self_id)
-        local_val = seven_day[list(seven_day.keys())[0]]
+        date = dt_date.today()
     else:
-        local_val = await gv.get_sp_val(bot_id, bot_self_id, name)
+        date = dt_date.fromisoformat(name)
 
-    c_data = {}
-    for g in local_val['group']:
-        a_pie_data.append(
-            {"value": sum(list(local_val['group'][g].values())), "name": g}
+    date_format = date.strftime('%Y-%m-%d')
+
+    if count == 1:
+        if bot_id == 'None' or bot_self_id == 'None':
+            bot_id = None
+            bot_self_id = None
+
+        datas: Sequence[CoreDataAnalysis] = await CoreDataAnalysis.get_sp_data(
+            date,
+            bot_id,
+            bot_self_id,
         )
-    for u in local_val['user']:
-        for c in local_val['user'][u]:
-            if c not in c_data:
-                c_data[c] = 0
-            c_data[c] += local_val['user'][u][c]
 
-    for c in c_data:
-        b_pie_data.append({"value": c_data[c], "name": c})
-        # l_data.append(c)
+        c_data: Dict[str, int] = {}
+        g_data: Dict[str, Dict[str, int]] = {}
+        u_data: Dict[str, Dict[str, int]] = {}
+        for d in datas:
+            if d.data_type == DataType.USER:
+                if d.command_name not in c_data:
+                    c_data[d.command_name] = 0
+                c_data[d.command_name] += d.command_count
 
-    data = {
-        "series": [
-            {
-                "data": a_pie_data,
-                "type": "pie",
-                "name": "群组触发命令",
-                # "selectedMode": "single",
-                "radius": [0, "30%"],
-                "label": {"position": "inner", "fontSize": 14},
-                "labelLine": {"show": False},
+                if d.target_id not in u_data:
+                    u_data[d.target_id] = {}
+                if d.command_name not in u_data[d.target_id]:
+                    u_data[d.target_id][d.command_name] = 0
+                u_data[d.target_id][d.command_name] += d.command_count
+
+            if d.data_type == DataType.GROUP:
+                if d.target_id not in g_data:
+                    g_data[d.target_id] = {}
+                if d.command_name not in g_data[d.target_id]:
+                    g_data[d.target_id][d.command_name] = 0
+                g_data[d.target_id][d.command_name] += d.command_count
+
+        TEMP_DICT[f'{bot_id}/{bot_self_id}/{date_format}'] = {
+            'c_data': c_data,
+            'g_data': g_data,
+            'u_data': u_data,
+        }
+    else:
+        while f'{bot_id}/{bot_self_id}/{date_format}' not in TEMP_DICT:
+            await asyncio.sleep(1)
+        c_data = TEMP_DICT[f'{bot_id}/{bot_self_id}/{date_format}']['c_data']
+        g_data = TEMP_DICT[f'{bot_id}/{bot_self_id}/{date_format}']['g_data']
+        u_data = TEMP_DICT[f'{bot_id}/{bot_self_id}/{date_format}']['u_data']
+
+    # 对c_data按值从大到小排序
+    sorted_items = sorted(c_data.items(), key=lambda x: x[1], reverse=True)
+    y_data = [k for k, v in sorted_items]
+    series_data = [v for k, v in sorted_items]
+
+    if count == 1:
+        echarts_option = {
+            "title": {"text": "命令使用量"},
+            "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+            "legend": {},
+            "grid": {
+                "left": "3%",
+                "right": "4%",
+                "bottom": "3%",
+                "containLabel": True,
             },
-            {
-                "name": "命令调用次数",
-                "type": "pie",
-                "radius": ["45%", "60%"],
-                "labelLine": {"length": 30},
-                "label": {
-                    "formatter": "{a|{a}}{abg|}\n{hr|}\n  {b|{b}：}{c}  {per|{d}%}",  # noqa: E501
-                    "backgroundColor": "#F6F8FC",
-                    "borderColor": "#8C8D8E",
-                    "borderWidth": 1,
-                    "borderRadius": 4,
-                    "rich": {
-                        "a": {
-                            "color": "#6E7079",
-                            "lineHeight": 22,
-                            "align": "center",
-                        },
-                        "hr": {
-                            "borderColor": "#8C8D8E",
-                            "width": "100%",
-                            "borderWidth": 1,
-                            "height": 0,
-                        },
-                        "b": {
-                            "color": "#4C5058",
-                            "fontSize": 14,
-                            "fontWeight": "bold",
-                            "lineHeight": 33,
-                        },
-                        "per": {
-                            "color": "#fff",
-                            "backgroundColor": "#4C5058",
-                            "padding": [3, 4],
-                            "borderRadius": 4,
-                        },
-                    },
-                },
-                "data": b_pie_data,
+            "xAxis": {"type": "value", "boundaryGap": [0, 0.01]},
+            "yAxis": {
+                "type": "category",
+                "data": y_data,
             },
-        ],
-        "tooltip": {
-            "trigger": "item",
-            "formatter": "{a} <br/>{b}: {c} ({d}%)",
-        },
-    }
+            "series": [
+                {
+                    "name": "命令",
+                    "type": "bar",
+                    "data": series_data,
+                }
+            ],
+        }
+    elif count == 2:
+        # 对g_data进行筛选，仅保留命令数量总和前20的target_id，并按数量降序排序
+        # 计算每个target_id的命令总数
+        group_total = {gid: sum(cmds.values()) for gid, cmds in g_data.items()}
+        # 取前20个target_id
+        top_groups = sorted(
+            group_total.items(), key=lambda x: x[1], reverse=True
+        )[:20]
+        # 构建新的g_data，只保留前20
+        g_data = {gid: g_data[gid] for gid, _ in top_groups}
+
+        uall_series: List[str] = y_data[:8] + ['其他命令']
+        u_series = []
+        ufinnal_count: Dict[str, List[int]] = {c: [] for c in uall_series}
+        for g in g_data:
+            others = 0
+            group_cmds = g_data[g]
+            for cmd in group_cmds:
+                if cmd in ufinnal_count:
+                    ufinnal_count[cmd].append(g_data[g][cmd])
+                else:
+                    others += g_data[g][cmd]
+
+            for cmd in y_data[:8]:
+                if cmd not in group_cmds:
+                    ufinnal_count[cmd].append(0)
+
+            ufinnal_count['其他命令'].append(others)
+
+        for f in ufinnal_count:
+            u_series.append(
+                {
+                    "name": f,
+                    "type": "bar",
+                    "stack": "total",
+                    "label": {"show": True},
+                    "emphasis": {"focus": "series"},
+                    "data": ufinnal_count[f],
+                }
+            )
+
+        echarts_option = {
+            "title": {"text": "群组命令触发量"},
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "shadow"},
+            },
+            "legend": {},
+            "grid": {
+                "left": "3%",
+                "right": "4%",
+                "bottom": "3%",
+                "containLabel": True,
+            },
+            "xAxis": {"type": "value"},
+            "yAxis": {
+                "type": "category",
+                "data": list(g_data.keys()),
+            },
+            "series": u_series,
+        }
+
+    else:
+        user_total = {gid: sum(cmds.values()) for gid, cmds in u_data.items()}
+        top_users = sorted(
+            user_total.items(), key=lambda x: x[1], reverse=True
+        )[:20]
+        u_data = {gid: u_data[gid] for gid, _ in top_users}
+
+        all_series: List[str] = y_data[:8] + ['其他命令']
+        u_series = []
+        finnal_count: Dict[str, List[int]] = {c: [] for c in all_series}
+        for gid in u_data:
+            others = 0
+            user_cmds = u_data[gid]
+            for cmd in user_cmds:
+                if cmd in finnal_count:
+                    finnal_count[cmd].append(user_cmds[cmd])
+                else:
+                    others += user_cmds[cmd]
+
+            for cmd in y_data[:8]:
+                if cmd not in user_cmds:
+                    finnal_count[cmd].append(0)
+
+            finnal_count['其他命令'].append(others)
+
+        for f in finnal_count:
+            u_series.append(
+                {
+                    "name": f,
+                    "type": "bar",
+                    "stack": "total",
+                    "label": {"show": True},
+                    "emphasis": {"focus": "series"},
+                    "data": finnal_count[f],
+                }
+            )
+
+        echarts_option = {
+            "title": {"text": "个人命令触发量"},
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "shadow"},
+            },
+            "legend": {},
+            "grid": {
+                "left": "3%",
+                "right": "4%",
+                "bottom": "3%",
+                "containLabel": True,
+            },
+            "xAxis": {"type": "value"},
+            "yAxis": {
+                "type": "category",
+                "data": list(u_data.keys()),
+            },
+            "series": u_series,
+        }
+
     return {
         'status': 0,
         'msg': 'ok',
-        'data': data,
+        "data": echarts_option,
     }
 
 

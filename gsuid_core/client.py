@@ -22,7 +22,7 @@ class GsClient:
         self = GsClient()
         cls.ws_url = f'ws://{IP}:{PORT}/ws/Nonebot'
         print(f'连接至WS链接{self.ws_url}...')
-        cls.ws = await websockets.client.connect(
+        cls.ws = await websockets.client.connect(  # type: ignore
             cls.ws_url, max_size=2**25, open_timeout=30
         )
         print('已成功链接！')
@@ -52,7 +52,7 @@ class GsClient:
             msg = MessageReceive(
                 bot_id='console',
                 # bot_id='qqgroup',
-                bot_self_id='511love51',
+                bot_self_id='3399214199',
                 user_type='group',
                 user_pm=0,
                 group_id=group_id,
