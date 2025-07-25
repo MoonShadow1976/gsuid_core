@@ -156,6 +156,7 @@ dependencies = [
     "betterproto>=2.0.0b7",
     "structlog>=25.3.0",
     "rich>=14.0.0",
+    "opencc>=1.1.9",
 ]
 name = "gsuid-core"
 version = "0.7.5"
