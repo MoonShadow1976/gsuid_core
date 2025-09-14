@@ -1,4 +1,14 @@
-from typing import Dict, Union, Literal, Optional, Sequence
+from typing import (
+    Dict,
+    List,
+    Union,
+    Literal,
+    Callable,
+    Optional,
+    Sequence,
+    Awaitable,
+    TypedDict,
+)
 
 from gsuid_core.models import Event
 from gsuid_core.utils.database.models import Subscribe
@@ -66,6 +76,7 @@ class GsCoreSubscribe:
                 bot_self_id=event.bot_self_id,
                 user_type=event.user_type,
                 extra_message=extra_message,
+                WS_BOT_ID=event.WS_BOT_ID,
                 uid=uid,
             )
         else:
@@ -76,6 +87,7 @@ class GsCoreSubscribe:
                 'group_id',
                 'bot_self_id',
                 'user_type',
+                'WS_BOT_ID',
             ]:
                 if i not in opt:
                     upd[i] = event.__getattribute__(i)
@@ -93,6 +105,7 @@ class GsCoreSubscribe:
         bot_id: Optional[str] = None,
         user_type: Optional[str] = None,
         uid: Optional[str] = None,
+        WS_BOT_ID: Optional[str] = None,
     ):
         params = {
             'task_name': task_name,
@@ -106,6 +119,9 @@ class GsCoreSubscribe:
         if uid:
             params['uid'] = uid
 
+        if WS_BOT_ID:
+            params['WS_BOT_ID'] = WS_BOT_ID
+
         all_data: Optional[Sequence[Subscribe]] = await Subscribe.select_rows(
             distinct=False, **params
         )
@@ -117,12 +133,16 @@ class GsCoreSubscribe:
         task_name: str,
         event: Event,
         uid: Optional[str] = None,
+        WS_BOT_ID: Optional[str] = None,
     ):
         params = {
             'task_name': task_name,
         }
         if uid:
             params['uid'] = uid
+
+        if WS_BOT_ID:
+            params['WS_BOT_ID'] = WS_BOT_ID
 
         if subscribe_type == 'session' and event.user_type == 'group':
             await Subscribe.delete_row(group_id=event.group_id, **params)
@@ -144,6 +164,7 @@ class GsCoreSubscribe:
             'bot_id',
             'bot_self_id',
             'user_type',
+            'WS_BOT_ID',
         ]:
             sed[i] = event.__getattribute__(i)
 
@@ -159,6 +180,50 @@ class GsCoreSubscribe:
         upd['extra_message'] = extra_message
 
         await Subscribe.update_data_by_data(sed, upd)
+
+    async def muti_task(
+        self,
+        datas: Sequence[Subscribe],
+        func: Callable[..., Awaitable[str]],
+        attr: str = 'uid',
+    ):
+        priv_result: Dict[str, PrivTask] = {}
+        group_result: Dict[str, GroupTask] = {}
+        for data in datas:
+            if data.__getattribute__(attr):
+                im = await func(data.__getattribute__(attr))
+                if data.user_type == 'group':
+                    sid = f'{data.WS_BOT_ID}_{data.group_id}'
+                    if sid not in group_result:
+                        group_result[sid] = {
+                            'success': 0,
+                            'fail': 0,
+                            'event': data,
+                        }
+                    if '失败' in im:
+                        group_result[sid]['fail'] += 1
+                    else:
+                        group_result[sid]['success'] += 1
+                else:
+                    sid = f'{data.WS_BOT_ID}_{data.user_id}'
+                    if sid not in priv_result:
+                        priv_result[sid] = {
+                            'im': [],
+                            'event': data,
+                        }
+                    priv_result[sid]['im'].append(im)
+        return priv_result, group_result
+
+
+class GroupTask(TypedDict):
+    success: int
+    fail: int
+    event: Subscribe
+
+
+class PrivTask(TypedDict):
+    im: List[str]
+    event: Subscribe
 
 
 gs_subscribe = GsCoreSubscribe()

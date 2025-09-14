@@ -16,6 +16,10 @@ exec_list = [
     'CREATE INDEX idx_group_name ON coregroup (group_name);',
     'CREATE INDEX idx_group_id ON coregroup (group_id);',
     "ALTER TABLE Subscribe ADD COLUMN uid STRING DEFAULT NULL;",
+    "ALTER TABLE Subscribe ADD COLUMN WS_BOT_ID STRING DEFAULT NULL;",
+    'CREATE INDEX ix_subscribe_task_name ON Subscribe (task_name);',
+    'CREATE INDEX ix_subscribe_uid ON Subscribe (uid);',
+    'CREATE INDEX ix_subscribe_task_name_uid ON Subscribe (task_name, uid);',
 ]
 
 
@@ -36,46 +40,6 @@ async def move_database():
 
 @on_core_start
 async def trans_adapter():
-    '''
-    async with engine.begin() as conn:
-        metadata = MetaData()
-        try:
-            await conn.run_sync(metadata.reflect)
-        except NoSuchTableError:
-            logger.info('[迁移WebConsole数据表] 无需操作..')
-        if 'auth_role' in metadata.tables:
-            async with async_maker() as session:
-                async with session.begin():
-                    # 检查 auth_role 表中是否存在 delete_time 列
-                    table = metadata.tables['auth_role']
-                    column_exists = 'delete_time' in table.columns.keys()
-
-                    if not column_exists:
-                        tables_to_delete = [
-                            'auth_group',
-                            'auth_group_roles',
-                            'auth_permission',
-                            'auth_role',
-                            'auth_role_permission',
-                            'auth_token',
-                            'auth_user',
-                            'auth_user_groups',
-                            'auth_user_roles',
-                        ]
-                        logger.info('[迁移WebConsole数据表] 正在执行..')
-                        for table_name in tables_to_delete:
-                            try:
-                                table = metadata.tables[table_name]
-                                await conn.execute(
-                                    DropTable(table, if_exists=True)
-                                )
-                            except:  # noqa: E722
-                                pass
-                        logger.info('[迁移WebConsole数据表] 操作完成..')
-        else:
-            logger.info('[迁移WebConsole数据表] 无需操作...')
-    '''
-
     async with async_maker() as session:
         for _t in exec_list:
             try:

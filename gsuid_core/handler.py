@@ -45,6 +45,7 @@ async def handle_event(ws: _Bot, msg: MessageReceive, is_http: bool = False):
         event.raw_text = cc.convert(event.raw_text)
     except Exception:
             logger.info("[繁体转简体] 错误")
+    event.WS_BOT_ID = ws.bot_id
     if show_receive:
         logger.info('[收到事件]', event_payload=event)
 

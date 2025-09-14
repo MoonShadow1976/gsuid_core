@@ -1,11 +1,12 @@
 from typing import List, Type, Union, Optional, Sequence
 
-from sqlmodel import Field, select, update
 from sqlalchemy import UniqueConstraint, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import Field, Index, select, update
 
 from gsuid_core.bot import Bot
 from gsuid_core.gss import gss
+from gsuid_core.logger import logger
 from gsuid_core.models import Event, Message
 from gsuid_core.message_models import ButtonType
 
@@ -22,12 +23,22 @@ from .base_models import (
 
 
 class Subscribe(BaseModel, table=True):
-    group_id: Optional[str] = Field(title='群ID', default=None)
-    task_name: str = Field(title='任务名称', default=None)
+    __table_args__ = (
+        Index(
+            'ix_subscribe_task_name_uid',
+            'task_name',
+            'uid',
+        ),
+        {'extend_existing': True},
+    )
+
+    WS_BOT_ID: Optional[str] = Field(title='WS机器人ID', default=None)
+    group_id: Optional[str] = Field(title='群ID', default=None, index=True)
+    task_name: str = Field(title='任务名称', default=None, index=True)
     bot_self_id: str = Field(title='机器人自身ID', default=None)
     user_type: str = Field(title='发送类型', default=None)
     extra_message: Optional[str] = Field(title='额外消息', default=None)
-    uid: str = Field(title='账户ID', default=None)
+    uid: str = Field(title='账户ID', default=None, index=True)
 
     async def send(
         self,
@@ -47,30 +58,42 @@ class Subscribe(BaseModel, table=True):
         command_start_text: str = '',
         force_direct: bool = False,
     ):
-        for bot_id in gss.active_bot:
-            BOT = gss.active_bot[bot_id]
-            if force_direct:
-                user_type = 'direct'
-            else:
-                user_type = self.user_type
-            ev = Event(
-                bot_id=self.bot_id,
-                user_id=self.user_id,
-                bot_self_id=self.bot_self_id,
-                user_type=user_type,  # type: ignore
-                group_id=self.group_id,
-                real_bot_id=self.bot_id,
-            )
+        if force_direct:
+            user_type = 'direct'
+        else:
+            user_type = self.user_type
+        ev = Event(
+            bot_id=self.bot_id,
+            user_id=self.user_id,
+            bot_self_id=self.bot_self_id,
+            user_type=user_type,  # type: ignore
+            group_id=self.group_id,
+            real_bot_id=self.bot_id,
+        )
+        params = {
+            'reply': reply,
+            'option_list': option_list,
+            'unsuported_platform': unsuported_platform,
+            'sep': sep,
+            'command_tips': command_tips,
+            'command_start_text': command_start_text,
+        }
 
-            bot = Bot(BOT, ev)
-            await bot.send_option(
-                reply,
-                option_list,
-                unsuported_platform,
-                sep,
-                command_tips,
-                command_start_text,
-            )
+        if self.WS_BOT_ID:
+            if self.WS_BOT_ID in gss.active_bot:
+                BOT = gss.active_bot[self.WS_BOT_ID]
+                bot = Bot(BOT, ev)
+                await bot.send_option(**params)
+            else:
+                logger.error(
+                    f'[订阅] 机器人{self.WS_BOT_ID}不存在, 该消息无法发送!'
+                )
+                return -1
+        else:
+            for bot_id in gss.active_bot:
+                BOT = gss.active_bot[bot_id]
+                bot = Bot(BOT, ev)
+                await bot.send_option(**params)
 
 
 class CoreTag(BaseIDModel, table=True):
@@ -557,4 +580,5 @@ class GsUID(BaseIDModel, table=True):
             query.execution_options(synchronize_session='fetch')
             await session.execute(query)
             return 0
+        return -1
         return -1
