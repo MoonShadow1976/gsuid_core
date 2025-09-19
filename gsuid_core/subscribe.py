@@ -11,6 +11,7 @@ from typing import (
 )
 
 from gsuid_core.models import Event
+from gsuid_core.segment import MessageSegment
 from gsuid_core.utils.database.models import Subscribe
 
 
@@ -190,8 +191,9 @@ class GsCoreSubscribe:
         priv_result: Dict[str, PrivTask] = {}
         group_result: Dict[str, GroupTask] = {}
         for data in datas:
-            if data.__getattribute__(attr):
-                im = await func(data.__getattribute__(attr))
+            attr_data = data.__getattribute__(attr)
+            if attr_data:
+                im = await func(attr_data)
                 if data.user_type == 'group':
                     sid = f'{data.WS_BOT_ID}_{data.group_id}'
                     if sid not in group_result:
@@ -199,9 +201,19 @@ class GsCoreSubscribe:
                             'success': 0,
                             'fail': 0,
                             'event': data,
+                            'push_message': [],
                         }
                     if '失败' in im:
                         group_result[sid]['fail'] += 1
+                        qid = attr_data = data.__getattribute__("user_id")
+                        group_result[sid]['push_message'].extend(
+                            [
+                                MessageSegment.text('\n'),
+                                MessageSegment.at(qid),
+                                MessageSegment.text('\n'),
+                                MessageSegment.text(im),
+                            ]
+                        )
                     else:
                         group_result[sid]['success'] += 1
                 else:
@@ -213,6 +225,16 @@ class GsCoreSubscribe:
                         }
                     priv_result[sid]['im'].append(im)
         return priv_result, group_result
+
+    async def _to_dict(
+        self, data: Sequence[Subscribe]
+    ) -> Dict[str, List[Subscribe]]:
+        result: Dict[str, List[Subscribe]] = {}
+        for item in data:
+            if str(item.uid) not in result:
+                result[str(item.uid)] = []
+            result[str(item.uid)].append(item)
+        return result
 
 
 class GroupTask(TypedDict):
