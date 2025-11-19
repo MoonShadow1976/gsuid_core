@@ -38,7 +38,9 @@ class Subscribe(BaseModel, table=True):
     bot_self_id: str = Field(title='机器人自身ID', default=None)
     user_type: str = Field(title='发送类型', default=None)
     extra_message: Optional[str] = Field(title='额外消息', default=None)
-    uid: str = Field(title='账户ID', default=None, index=True)
+    uid: Optional[str] = Field(title='账户ID', default=None, index=True)
+    extra_data: Optional[str] = Field(title='额外消息2', default=None)
+    msg_id: Optional[str] = Field(title='消息ID', default=None)
 
     async def send(
         self,
@@ -69,6 +71,7 @@ class Subscribe(BaseModel, table=True):
             user_type=user_type,  # type: ignore
             group_id=self.group_id,
             real_bot_id=self.bot_id,
+            msg_id=self.msg_id if self.msg_id else '',
         )
         params = {
             'reply': reply,
