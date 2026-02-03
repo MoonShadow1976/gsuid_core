@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Union
 from pathlib import Path
 
 from msgspec import ValidationError, json as msgjson, to_builtins
+from boltons.fileutils import atomic_save
 
 from gsuid_core.logger import logger
 from gsuid_core.data_store import get_res_path
@@ -77,17 +78,16 @@ class StringConfig:
         self.write_config()
 
     def write_config(self):
-        # 使用缓存文件避免强行关闭造成文件损坏
-        temp_file_path = self.CONFIG_PATH.parent / f"{self.CONFIG_PATH.name}.bak"
-
-        if temp_file_path.exists():
-            temp_file_path.unlink()
-
-        with open(temp_file_path, "wb") as file:
-            file.write(msgjson.format(msgjson.encode(self.config), indent=4))
-
-        self.CONFIG_PATH.unlink()
-        temp_file_path.rename(self.CONFIG_PATH)
+        with atomic_save(
+            str(self.CONFIG_PATH),
+            text_mode=False,
+            overwrite=True,
+            file_perms=0o644,
+        ) as file:
+            if file:
+                file.write(msgjson.format(msgjson.encode(self.config), indent=4))
+            else:
+                logger.error("写入配置文件失败!")
 
     def repair_config(self):
         with open(self.CONFIG_PATH, "r", encoding="UTF-8") as f:
@@ -110,15 +110,21 @@ class StringConfig:
     def update_config(self):
         is_error = False
         # 打开config.json
-        with open(self.CONFIG_PATH, "r", encoding="UTF-8") as f:
-            try:
-                self.config: Dict[str, GSC] = msgjson.decode(
-                    f.read(),
-                    type=Dict[str, GSC],
-                )
-            except ValidationError:
-                self.repair_config()
-                is_error = True
+        try:
+            with open(self.CONFIG_PATH, "r", encoding="UTF-8") as f:
+                d = f.read()
+        except UnicodeDecodeError:
+            with open(self.CONFIG_PATH, "r") as f:
+                d = f.read()
+
+        try:
+            self.config: Dict[str, GSC] = msgjson.decode(
+                d,
+                type=Dict[str, GSC],
+            )
+        except ValidationError:
+            self.repair_config()
+            is_error = True
 
         if is_error:
             self.update_config()
@@ -132,6 +138,9 @@ class StringConfig:
             else:
                 if isinstance(_defalut, GsStrConfig) or isinstance(_defalut, GsListStrConfig):
                     self.config[key].options = _defalut.options  # type: ignore
+
+                self.config[key].title = _defalut.title
+                self.config[key].desc = _defalut.desc
 
         # 对默认值没有的值，直接删除
         delete_keys = []

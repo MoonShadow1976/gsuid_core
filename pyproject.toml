@@ -14,10 +14,9 @@ dependencies = [
     "pillow>=10.2.0",
     "aiosqlite>=0.17.0",
     "aiofiles>=0.8.0",
-    "sqlmodel>=0.0.8",
     "gitpython>=3.1.27",
-    "fastapi-amis-admin>=0.7.1",
-    "fastapi-user-auth>=0.7.2",
+    "fastapi-amis-admin>=0.7.3",
+    "fastapi-user-auth>=0.7.3",
     "qrcode[pil]<8.0.0,>=7.3.1",
     "msgspec>=0.13.1",
     "uvicorn>=0.20.0",
@@ -34,11 +33,8 @@ dependencies = [
     "bcrypt==4.0.1",
     "setuptools>=69.0.3",
     "email-validator>=2.2.0",
-    "pydantic<=2.8.2,>=2.0.0",
-    "pydantic-settings>=2.3.4",
-    "pydantic-core>=2.20.1",
     "annotated-types>=0.7.0",
-    "sqlmodel>=0.0.14",
+    "sqlmodel<0.0.31",
     "fastapi<0.112.3",
     "async-timeout<5.0.0,>=4.0.3",
     "toml<1.0.0,>=0.10.2",
@@ -54,52 +50,23 @@ dependencies = [
     "cryptography>=45.0.5",
     "packaging>=25.0",
     "greenlet>=3.2.4",
+    "boltons>=25.0.0",
+    "lmdb>=1.7.5",
+    "openai>=2.15.0",
+    "google-generativeai>=0.8.6",
+    "jieba>=0.42.1",
+    "chromadb>=1.4.1",
+    "joblib>=1.5.3",
+    "scikit-learn>=1.7.2",
+    "pydantic>=2.12.2",
+    "pydantic-settings>=2.12.0",
+    "pydantic-core>=2.20.1",
+    "playwright>=1.58.0",
 ]
 name = "gsuid-core"
-version = "0.8.7"
+version = "0.9.1"
 description = "KimigaiiWuyi/GenshinUID 的核心部分，平台无关，便于移植到其他平台以及框架。"
 readme = "README.md"
-
-[tool.poetry.dependencies]
-python = ">=3.10,<4.0"
-httpx = ">=0.23.0"
-beautifulsoup4 = ">=4.11.1"
-lxml = ">=4.9.2"
-aiohttp = ">=3.8.1"
-sqlalchemy = ">=2.0.0,<2.1.0"
-pillow = ">=10.2.0"
-aiosqlite = ">=0.17.0"
-aiofiles = ">=0.8.0"
-sqlmodel = ">=0.0.14"
-gitpython = ">=3.1.27"
-fastapi-amis-admin = ">=0.7.1"
-fastapi-user-auth = ">=0.7.2"
-qrcode = { extras = ["pil"], version = "^7.3.1" }
-msgspec = ">= 0.13.1"
-uvicorn = ">=0.20.0"
-websockets = ">=13.1"
-urllib3 = "^1.26.15"
-mpmath = "^1.3.0"
-fastapi = "<0.112.3"
-apscheduler = "^3.10.1"
-aioboto3 = "^12.0.0"
-jinja2 = "^3.1.2"
-colorama = "^0.4.6"
-async-timeout = "^4.0.3"
-toml = "^0.10.2"
-bcrypt = "^4.0.1"
-setuptools = ">=69.0.3"
-pydantic = ">=2.0.0, <=2.8.2"
-pydantic-settings = ">=2.3.4"
-email-validator = "^2.2.0"
-pydantic-core = ">=2.20.1"
-psutil = "^6.1.1"
-pytz = "^2024.2"
-pandas = "^2.2.3"
-betterproto = ">=2.0.0b7"
-structlog = ">=25.3.0"
-rich = ">=14.0.0"
-cryptography = ">=45.0.5"
 
 [tool.poetry.requires-plugins]
 poetry-plugin-export = ">=1.8"
@@ -117,21 +84,6 @@ dev = ["ruff>=0.14.7", "pre-commit>=2.21.0"]
 [tool.pdm.build]
 includes = ["gsuid_core"]
 
-[[tool.poetry.source]]
-name = "aliyun"
-url = "https://mirrors.aliyun.com/pypi/simple"
-priority = "primary"
-
-[[tool.poetry.source]]
-name = "tsinghua"
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
-priority = "primary"
-
-[[tool.poetry.source]]
-name = "official-pypi"
-url = "https://pypi.org/simple"
-priority = "primary"
-
 [build-system]
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
@@ -139,61 +91,12 @@ build-backend = "pdm.backend"
 [dependency-groups]
 dev = ["ruff>=0.14.7", "pre-commit>=2.21.0"]
 
-[tool.black]
-line-length = 79
-target-version = ["py38", "py39", "py310"]
-include = '\.pyi?$'
-skip-string-normalization = true
-extend-exclude = '''
-'''
-
-[tool.isort]
-profile = "black"
-line_length = 79
-length_sort = true
-skip_gitignore = true
-force_sort_within_sections = true
-extra_standard_library = ["typing_extensions"]
-
-[[tool.uv.index]]
-name = "aliyun"
-url = "https://mirrors.aliyun.com/pypi/simple"
-default = true
-
-[[tool.uv.index]]
-name = "tsinghua"
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
-
-[[tool.uv.index]]
-name = "pypi"
-url = "https://pypi.org/simple"
-
-[[tool.uv.index]]
-name = "volces"
-url = "https://mirrors.volces.com/pypi/simple"
+[tool.uv]
+default-groups = []
 
 [tool.pdm.resolution]
 respect-source-order = true
 
-[[tool.pdm.source]]
-name = "aliyun"
-url = "https://mirrors.aliyun.com/pypi/simple"
-verify_ssl = true
-
-[[tool.pdm.source]]
-name = "tsinghua"
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
-verify_ssl = true
-
-[[tool.pdm.source]]
-name = "pypi"
-url = "https://pypi.org/simple"
-verify_ssl = true
-
-[[tool.pdm.source]]
-name = "volces"
-url = "https://mirrors.volces.com/pypi/simple"
-verify_ssl = true
 
 [project.urls]
 "Bug Tracker" = "https://github.com/Genshin-bots/gsuid-core/issues"

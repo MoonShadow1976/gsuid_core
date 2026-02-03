@@ -217,6 +217,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.env
 
 # Spyder project settings
 .spyderproject
@@ -677,7 +678,9 @@ logs
 .pdm-build
 .VSCodeCounter
 .ruff_cache
+.DS_Store
 
 # dependencies
 uv.toml
 pdm.toml
+.python-version

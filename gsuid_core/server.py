@@ -88,10 +88,21 @@ class GsServer:
             self.active_bot: Dict[str, _Bot] = {}
             self.is_initialized = True
 
-    def load_dir_plugins(self, plugin: Path, plugin_parent: str, nest: bool = False) -> List[Tuple[str, Path, str]]:
+    def load_dir_plugins(
+        self,
+        plugin: Path,
+        plugin_parent: str,
+        nest: bool = False,
+        dev_mode: bool = False,
+    ) -> List[Tuple[str, Path, str]]:
         module_list = []
         init_path = plugin / "__init__.py"
-        name = plugin.name
+
+        if dev_mode:
+            name1 = plugin.name + "-dev"
+        else:
+            name1 = plugin.name
+        name2 = plugin.name
 
         if init_path.exists():
             # fix: 使用 parent 而不是 parents (parents是迭代器)
@@ -102,7 +113,7 @@ class GsServer:
 
             module_list.append(
                 (
-                    f"{plugin_parent}.{name}.{name}.__init__",
+                    f"{plugin_parent}.{name1}.{name2}.__init__",
                     init_path,
                     "plugin",
                 )
@@ -117,9 +128,9 @@ class GsServer:
                         sys.path.append(parent_path)
 
                     if nest:
-                        _p = f"{plugin_parent}.{name}.{name}.{sub_plugin.name}"
+                        _p = f"{plugin_parent}.{name1}.{name2}.{sub_plugin.name}"
                     else:
-                        _p = f"{plugin_parent}.{name}.{sub_plugin.name}"
+                        _p = f"{plugin_parent}.{name1}.{sub_plugin.name}"
                     module_list.append(
                         (
                             f"{_p}",
@@ -129,7 +140,7 @@ class GsServer:
                     )
         return module_list
 
-    def load_plugin(self, plugin: Union[str, Path]):
+    def load_plugin(self, plugin: Union[str, Path], dev_mode: bool = False):
         if isinstance(plugin, str):
             plugin = PLUGIN_PATH / plugin
 
@@ -161,14 +172,19 @@ class GsServer:
                     check_pyproject(pyproject)
 
                 if plugins_path.exists():
-                    module_list = self.load_dir_plugins(plugin, plugin_parent)
+                    module_list = self.load_dir_plugins(
+                        plugin,
+                        plugin_parent,
+                        dev_mode=dev_mode,
+                    )
                 elif nest_path.exists() or src_path.exists():
-                    path = nest_path.parent / plugin.name
+                    path = nest_path.parent / plugin.name.rstrip("-dev")
                     if path.exists():
                         module_list = self.load_dir_plugins(
                             path,
                             plugin_parent,
                             True,
+                            dev_mode=dev_mode,
                         )
                 # 如果文件夹内有__init_.py，则视为单个插件包
                 elif plugin_path.exists():
@@ -242,7 +258,7 @@ class GsServer:
             if dev_mode and not plugin.name.endswith("-dev"):
                 continue
 
-            d = self.load_plugin(plugin)
+            d = self.load_plugin(plugin, dev_mode)
             if isinstance(d, str):
                 continue
             all_plugins.extend(d)
@@ -448,7 +464,11 @@ def install_packages(packages: List[str], upgrade: bool = False):
         # host = mirror_url.split("//")[-1].split("/")[0]
         # cmd.extend(["--trusted-host", host])
 
-        retcode = execute_cmd(cmd)
+        retcode, result = execute_cmd(cmd)
+
+        if "No module named pip" in result:
+            execute_cmd([sys.executable, "-m", "ensurepip"])
+            execute_cmd(cmd)
 
         if retcode == 0:
             logger.info(f"✅ [安装/更新依赖] 使用 [{mirror_name}] 安装成功!")
@@ -476,14 +496,15 @@ def execute_cmd(cmd_list: List[str]):
         result = subprocess.run(cmd_list, capture_output=True, text=True, shell=False)
         if result.returncode == 0:
             logger.success("[CMD执行] 成功!")
-            return 0
+            return 0, result.stdout
         else:
             logger.warning(f"[CMD执行] 失败 (Code {result.returncode})")
             logger.warning(f"Stderr: {result.stderr}")
-            return result.returncode
+
+            return result.returncode, result.stderr
     except Exception as e:
         logger.exception(f"[CMD执行] 发生异常: {e}")
-        return -1
+        return -1, str(e)
 
 
 def refresh_installed_dependencies():
@@ -498,7 +519,7 @@ def refresh_installed_dependencies():
         # 重新扫描 distribution
         dists = list(metadata.distributions())
         for dist in dists:
-            name = dist.metadata.get("Name")
+            name = dist.metadata.get("Name")  # type: ignore
             version = dist.version
             if name:
                 # 关键修复：存入字典时也使用规范化名字

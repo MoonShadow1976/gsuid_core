@@ -2,7 +2,7 @@ import json
 import asyncio
 import datetime
 from copy import deepcopy
-from typing import Any, Set, Dict, List, Tuple, Optional, Sequence, TypedDict
+from typing import Set, Dict, List, Tuple, Optional, Sequence, TypedDict
 from pathlib import Path
 
 import aiofiles
@@ -10,7 +10,9 @@ import aiofiles
 from gsuid_core.logger import logger
 from gsuid_core.data_store import get_res_path
 from gsuid_core.utils.database.global_val_models import (
+    CountVal,
     DataType,
+    CoreTraffic,
     CoreDataSummary,
     CoreDataAnalysis,
 )
@@ -45,6 +47,42 @@ platform_val: PlatformVal = {
 }
 
 bot_val: BotVal = {}
+bot_traffic: Dict[str, float] = {
+    "req": 0,
+    "max_qps": 0,
+    "total_count": 0,
+    "total_time": 0.0,
+    "max_time": 0.0,
+}
+
+
+async def load_bot_max_qps():
+    logger.info("🔒️ 开始加载流量统计!")
+    today = datetime.date.today()
+    traffic: Optional[Sequence[CoreTraffic]] = await CoreTraffic.select_rows(date=today)
+    if traffic:
+        bot_traffic["max_qps"] = traffic[0].max_qps
+    logger.success(f"🔒️ 流量统计加载完成! {bot_traffic}")
+
+
+async def save_bot_max_qps():
+    logger.info(f"🔒️ 开始保存流量统计! {bot_traffic}")
+    today = datetime.date.today()
+
+    await CoreTraffic.batch_insert_data_with_update(
+        [
+            CoreTraffic(
+                max_qps=bot_traffic["max_qps"],
+                total_count=bot_traffic["total_count"],
+                total_time=bot_traffic["total_time"],
+                max_time=bot_traffic["max_time"],
+                date=today,
+            )
+        ],
+        ["max_qps", "total_count", "total_time", "max_time"],
+        ["date"],
+    )
+    logger.success("🔒️ 流量统计保存完成!")
 
 
 def merge_dict(dict1: PlatformVal, dict2: PlatformVal) -> PlatformVal:
@@ -98,28 +136,40 @@ async def get_all_bot_dict() -> Dict[str, List[str]]:
 
 async def get_global_analysis(
     data: Dict[str, PlatformVal],
-) -> Dict[str, Any]:
+) -> CountVal:
     try:
         sorted_days = sorted(data.keys(), reverse=True)
         if not sorted_days:
             return {
-                "DAU": 0,
-                "DAG": 0,
-                "NU": "0",
-                "OU": "0.00%",
-                "NG": "0",
-                "OG": "0.00%",
+                # 用户侧
+                "DAU": "0",
+                "MAU": "0",
+                "DAU_MAU": "0.00%",
+                "NewUser": "0",
+                "OutUser": "0.00%",
+                # 群组侧
+                "DAG": "0.00",
+                "MAG": "0",
+                "DAG_MAG": "0.00%",
+                "NewGroup": "0",
+                "OutGroup": "0.00%",
             }
     except (TypeError, ValueError):
         # 如果key不是可比较的类型，则返回错误或默认值
         # 这里选择返回默认值
         return {
-            "DAU": 0,
-            "DAG": 0,
-            "NU": "0",
-            "OU": "0.00%",
-            "NG": "0",
-            "OG": "0.00%",
+            # 用户侧
+            "DAU": "0",
+            "MAU": "0",
+            "DAU_MAU": "0.00%",
+            "NewUser": "0",
+            "OutUser": "0.00%",
+            # 群组侧
+            "DAG": "0.00",
+            "MAG": "0",
+            "DAG_MAG": "0.00%",
+            "NewGroup": "0",
+            "OutGroup": "0.00%",
         }
 
     # 2. 一次遍历，直接构建每日的用户和群组集合
@@ -180,13 +230,17 @@ async def get_global_analysis(
     out_user_rate = (len(out_users) / len(all_users)) * 100 if all_users else 0
     out_group_rate = (len(out_groups) / len(all_groups)) * 100 if all_groups else 0
 
-    result_data = {
+    result_data: CountVal = {
         "DAU": f"{dau:.2f}",
         "DAG": f"{dag:.2f}",
-        "NU": str(len(new_users)),
-        "OU": f"{out_user_rate:.2f}%",
-        "NG": str(len(new_groups)),
-        "OG": f"{out_group_rate:.2f}%",
+        "NewUser": str(len(new_users)),
+        "OutUser": f"{out_user_rate:.2f}%",
+        "NewGroup": str(len(new_groups)),
+        "OutGroup": f"{out_group_rate:.2f}%",
+        "MAU": str(len(all_users)),
+        "MAG": str(len(all_groups)),
+        "DAU_MAU": f"{(dau / len(all_users) * 100):.2f}%" if all_users else "0.00%",
+        "DAG_MAG": f"{(dag / len(all_groups) * 100):.2f}%" if all_groups else "0.00%",
     }
     return result_data
 

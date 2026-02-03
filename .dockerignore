@@ -1,2 +1,3 @@
 __pycache__
-./gsuid-core/data/*
+.venv/
+venv/

@@ -1,6 +1,7 @@
+import time
 import asyncio
 import inspect
-from typing import Dict, List, Union, Literal, Optional
+from typing import Dict, List, Union, Literal, Optional, Coroutine
 
 from fastapi import WebSocket
 from msgspec import json as msgjson
@@ -16,7 +17,7 @@ from gsuid_core.segment import (
     markdown_to_template_markdown,
 )
 from gsuid_core.gs_logger import GsLogger
-from gsuid_core.global_val import get_global_val
+from gsuid_core.global_val import bot_traffic, get_global_val
 from gsuid_core.load_template import (
     parse_button,
     custom_buttons,
@@ -55,6 +56,7 @@ class _Bot:
         self.queue = asyncio.queues.Queue()
         self.send_dict = {}
         self.bg_tasks = set()
+        self.sem = asyncio.Semaphore(10)
 
     async def target_send(
         self,
@@ -177,11 +179,31 @@ class _Bot:
         del self.send_dict[task_id]
         return result
 
+    async def _safe_run(self, coro: Coroutine):
+        start_time = time.perf_counter()
+        try:
+            bot_traffic["req"] += 1
+            bot_traffic["max_qps"] = max(bot_traffic["max_qps"], bot_traffic["req"])
+            await coro
+        except Exception:
+            logger.exception("[核心执行异常] 插件执行发生未捕获异常")
+        finally:
+            end_time = time.perf_counter()
+            duration = end_time - start_time
+
+            bot_traffic["total_count"] += 1
+            bot_traffic["total_time"] += duration
+            bot_traffic["max_time"] = max(bot_traffic["max_time"], duration)
+
+            bot_traffic["req"] -= 1
+            self.sem.release()
+            self.queue.task_done()
+
     async def _process(self):
         while True:
-            data = await self.queue.get()
-            asyncio.create_task(data)
-            self.queue.task_done()
+            coro = await self.queue.get()
+            await self.sem.acquire()
+            asyncio.create_task(self._safe_run(coro))
 
 
 class Bot:
@@ -340,7 +362,10 @@ class Bot:
                     success = True
 
                 if not success and istry and self.ev.real_bot_id in isc:
-                    md = await markdown_to_template_markdown(md)
+                    md = await markdown_to_template_markdown(
+                        md,
+                        self.bot_self_id,
+                    )
                     if self.ev.real_bot_id in enable_buttons_platform:
                         await self.send(md)
                         success = True
