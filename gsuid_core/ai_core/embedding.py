@@ -142,12 +142,12 @@ async def sync_tools_to_db():
     logger.info("🧠 [AI][Embedding] --- 同步完成 ---\n")
 
 
-async def search_tools(query: str, limit: int = 3):
+async def search_tools(query: str, limit: int = 5):
     """根据自然语言意图检索关联工具"""
     if client is None or embedding_model is None:
         raise RuntimeError("AI功能未启用，无法搜索工具")
 
-    logger.info(f"🧠 [AI][Embedding] 正在查询: {query}")
+    logger.info(f"🧠 [AI][Embedding][ToolSearch] 正在查询: {query}")
     query_vec = list(embedding_model.embed([query]))[0]
 
     response = await client.query_points(

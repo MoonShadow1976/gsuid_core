@@ -127,8 +127,8 @@ async def query_knowledge(
     query: str,
     category: Optional[str] = None,
     plugin: Optional[str] = None,
-    limit: int = 5,
-    score_threshold: float = 0.5,
+    limit: int = 10,
+    score_threshold: float = 0.45,
 ) -> List[ScoredPoint]:
     """查询知识
 
@@ -184,6 +184,7 @@ async def query_knowledge(
     filtered_results: list[ScoredPoint] = [point for point in response.points if point.score >= score_threshold]
 
     logger.info(f"🧠 [RAG] 查询完成: 找到 {len(filtered_results)} 个相关知识 (阈值: {score_threshold})")
+    logger.trace(f"🧠 [RAG] 查询结果: {filtered_results}")
 
     return filtered_results
 
