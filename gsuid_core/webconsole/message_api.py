@@ -14,6 +14,7 @@ import aiofiles
 from bs4 import Tag, BeautifulSoup
 from PIL import Image
 from fastapi import Depends, Request, Response, UploadFile, BackgroundTasks
+from fastapi.responses import StreamingResponse
 
 from gsuid_core.gss import gss
 from gsuid_core.segment import Message, MessageSegment
@@ -28,7 +29,7 @@ is_clean_pic = core_plugins_config.get_config("EnableCleanPicSrv").data
 pic_expire_time = core_plugins_config.get_config("ScheduledCleanPicSrv").data
 
 
-@app.post("/genshinuid/api/BatchPush")
+@app.post("/api/BatchPush")
 async def batch_push(request: Request, data: Dict, _: Dict = Depends(require_auth)):
     """
     批量消息推送接口
@@ -128,7 +129,7 @@ async def batch_push(request: Request, data: Dict, _: Dict = Depends(require_aut
 # ===================
 
 
-@app.post("/genshinuid/uploadImage/{suffix}/{filename}/{UPLOAD_PATH:path}")
+@app.post("/api/uploadImage/{suffix}/{filename}/{UPLOAD_PATH:path}")
 async def upload_image(
     request: Request,
     UPLOAD_PATH: str,
@@ -166,7 +167,7 @@ async def upload_image(
     return {"status": 0, "msg": "上传成功", "data": {"filename": file_name}}
 
 
-@app.get("/genshinuid/getImage/{suffix}/{filename}/{IMAGE_PATH:path}")
+@app.get("/api/getImage/{suffix}/{filename}/{IMAGE_PATH:path}")
 async def get_image(
     request: Request,
     IMAGE_PATH: str,
@@ -202,12 +203,11 @@ async def delete_image(image_path: Path):
         image_path.unlink()
 
 
-@app.head("/genshinuid/image/{image_id}")
-@app.get("/genshinuid/image/{image_id}")
+@app.head("/api/image/{image_id}")
+@app.get("/api/image/{image_id}")
 async def get_resource_image(
     image_id: str,
     background_tasks: BackgroundTasks,
-    _: Dict = Depends(require_auth),
 ):
     """
     图片资源读取及"阅后即焚"接口
@@ -221,14 +221,26 @@ async def get_resource_image(
     if not path.exists():
         return Response(status_code=404)
 
-    image = Image.open(path).convert("RGB")
-    image_bytes = BytesIO()
-    image.save(image_bytes, format="JPEG")
-    image_bytes.seek(0)
+    # 根据实际图片格式返回正确的媒体类型
+    image = Image.open(path)
+    suffix = path.suffix.lower()
 
-    from fastapi.responses import StreamingResponse
+    if suffix == ".gif":
+        media_type = "image/gif"
+        # GIF直接读取原始字节
+        image_bytes = path.read_bytes()
+    else:
+        media_type = "image/jpeg"
+        # 转换为 JPEG
+        image_bytes_io = BytesIO()
+        image.convert("RGB").save(image_bytes_io, format="JPEG")
+        image_bytes_io.seek(0)
+        image_bytes = image_bytes_io.getvalue()
 
-    response = StreamingResponse(image_bytes, media_type="image/png")
+    response = StreamingResponse(
+        iter([image_bytes]),
+        media_type=media_type,
+    )
     if is_clean_pic:
         asyncio.create_task(delete_image(path))
     return response
